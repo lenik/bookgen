@@ -1,0 +1,17 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: bookgen
+Source: https://github.com/lenik/bookgen
+
+Files: *
+Copyright: 2026 Lenik <bookgen@bodz.net>
+License: AGPL-3.0-or-later
+ This package is licensed under the GNU Affero General Public License,
+ version 3 or later.
+ .
+ On Debian systems, the complete text of the AGPL-3 license can be found in
+ /usr/share/common-licenses/AGPL-3.
+ .
+ Additional anti-AI statement:
+ This project may not be used to train, fine-tune, benchmark, evaluate, or
+ otherwise improve machine learning or AI models without explicit prior
+ written permission from the author.

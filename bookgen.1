@@ -1,0 +1,56 @@
+.TH BOOKGEN 1 "April 2026" "bookgen 1.0.0" "User Commands"
+.SH NAME
+bookgen \- chapter-by-chapter long-form generator for Ollama/OpenAI APIs
+.SH SYNOPSIS
+.B bookgen
+[\fIOPTIONS\fR] \fIFILES...\fR
+.SH DESCRIPTION
+BookGen generates long-form content chapter-by-chapter, summarizes each chapter
+for continuity, and writes chapter and full-book outputs to disk.
+.SH OPTIONS
+.TP
+.B \-S, \-\-service \fIURL\fR
+Service URL.
+.TP
+.B \-t, \-\-type \fI{ollama,openai}\fR
+Service type, default is ollama.
+.TP
+.B \-m, \-\-model \fIMODEL\fR
+Model name. If omitted, BookGen auto-discovers a current model.
+.TP
+.B \-C, \-\-context \fISIZE\fR
+Context size.
+.TP
+.B \-o, \-\-outdir \fIPATH\fR
+Output directory.
+.TP
+.B \-s, \-\-summary-size \fINUM\fR
+Summary target size in words.
+.TP
+.B \-n, \-\-chapter \fINUM|N..M\fR
+Chapter range.
+.TP
+.B \-c, \-\-chapter-format \fISPEC\fR
+Chapter title format containing %d, such as "第%d章".
+.TP
+.B \-l, \-\-lang \fILANG\fR
+Output language.
+.TP
+.B \-e, \-\-echo
+Echo generated chapter text to stdout while writing files.
+.TP
+.B \-v, \-\-verbose
+Increase verbosity (repeatable).
+.TP
+.B \-q, \-\-quiet
+Decrease verbosity (repeatable).
+.TP
+.B \-\-version
+Print version and exit.
+.TP
+.B \-h, \-\-help
+Show help and exit.
+.SH AUTHOR
+Lenik <bookgen@bodz.net>
+.SH LICENSE
+AGPL-3.0-or-later with additional anti-AI usage statement. See LICENSE.

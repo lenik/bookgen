@@ -1,0 +1,7 @@
+bookgen (1.0.0) unstable; urgency=medium
+
+  * Initial release.
+  * Add chapter-by-chapter generation workflow with continuity summaries.
+  * Add CLI, demo input, tests, and packaging scaffolding.
+
+ -- Lenik (谢继雷) <lenik@bodz.net>  Wed, 08 Apr 2026 00:00:00 +0000

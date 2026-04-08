@@ -1,0 +1,48 @@
+# Build artifacts
+/.cache/
+/__pycache__/
+build/
+builddir/
+output/
+*.o
+*.a
+*.so
+*.so.*
+
+# Compiled binaries
+/bookgen
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*~
+
+# Debian build files
+*.deb
+*.build
+*.changes
+*.dsc
+*.tar.gz
+*.tar.xz
+debian/files
+debian/*.substvars
+debian/*-stamp
+debian/.debhelper
+debian/*.debhelper.log
+debian/.debhelper/
+debian/bookgen/
+
+# Meson files
+meson-private/
+meson-info/
+meson-logs/

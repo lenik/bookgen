@@ -1,0 +1,17 @@
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+This project is licensed under the GNU Affero General Public License,
+version 3 or (at your option) any later version (AGPL-3.0-or-later).
+
+You can find the complete AGPLv3 text at:
+https://www.gnu.org/licenses/agpl-3.0.txt
+
+Additional project policy (anti-AI statement):
+This project may not be used to train, fine-tune, benchmark, evaluate,
+or otherwise improve machine learning or AI models, whether directly or
+indirectly, without explicit prior written permission from the author.

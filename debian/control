@@ -1,0 +1,15 @@
+Source: bookgen
+Section: text
+Priority: optional
+Maintainer: Lenik <bookgen@bodz.net>
+Build-Depends: debhelper-compat (= 13), dh-python, python3-all, meson, ninja-build
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/lenik/bookgen
+
+Package: bookgen
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}, python3-requests
+Description: Chapter-by-chapter long-form generator for Ollama/OpenAI APIs
+ BookGen automates long-form writing workflows by generating chapters,
+ creating continuity summaries between chapters, and storing markdown outputs.
