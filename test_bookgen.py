@@ -83,15 +83,21 @@ class BookGenFlowTest(unittest.TestCase):
             toc.write_text("# 第一章\n# 第二章\n", encoding="utf-8")
 
             responses = [
-                "# 第一章\n正文一。",
-                "<think>hidden</think>干净摘要一",
+                "# 第一章\n<think>chapter-hidden</think>\n正文一。",
+                "干净摘要一",
                 "# 第二章\n正文二。",
-                "<think>hidden2</think>干净摘要二",
+                "干净摘要二",
             ]
             call_idx = {"n": 0}
 
             def fake_call_with_retries(cfg, messages, retries=3, echo=False, think_enabled=None):  # noqa: ANN001
                 call_idx["n"] += 1
+                # 2nd call is summary for chapter 1; submitted chapter text should be cleaned.
+                if call_idx["n"] == 2:
+                    summary_user_prompt = messages[1]["content"]
+                    self.assertIn("正文一", summary_user_prompt)
+                    chapter_text_part = summary_user_prompt.split("Chapter text:\n", 1)[1]
+                    self.assertNotIn("<think>", chapter_text_part)
                 # 3rd call is chapter 2 generation; bridge should already be cleaned.
                 if call_idx["n"] == 3:
                     bridge_user_prompt = messages[1]["content"]
@@ -104,12 +110,36 @@ class BookGenFlowTest(unittest.TestCase):
 
             self.assertEqual(rc, 0)
             outdir = tmp_path / "story"
+            chapter_01 = (outdir / "chapter_01.md").read_text(encoding="utf-8")
             s1 = (outdir / "chapter_01_summary.txt").read_text(encoding="utf-8")
             s2 = (outdir / "chapter_02_summary.txt").read_text(encoding="utf-8")
+            self.assertIn("<think>", chapter_01)
             self.assertIn("干净摘要一", s1)
             self.assertIn("干净摘要二", s2)
             self.assertNotIn("<think>", s1)
             self.assertNotIn("<think>", s2)
+
+    def test_verbose_mode_dumps_chapter_input_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "story.txt"
+            toc = tmp_path / "story-toc.txt"
+            source.write_text("背景信息。", encoding="utf-8")
+            toc.write_text("# 第一章\n", encoding="utf-8")
+
+            responses = ["正文", "摘要"]
+
+            def fake_call_with_retries(cfg, messages, retries=3, echo=False, think_enabled=None):  # noqa: ANN001
+                return responses.pop(0)
+
+            with patch("bookgen.call_with_retries", side_effect=fake_call_with_retries):
+                rc = bookgen.run([str(source), str(toc), "-n", "1", "-l", "Chinese", "-v"])
+
+            self.assertEqual(rc, 0)
+            outdir = tmp_path / "story"
+            bundle = (outdir / "chapter_01.input").read_text(encoding="utf-8")
+            self.assertIn("\"messages\"", bundle)
+            self.assertIn("Write Chapter 1", bundle)
 
     def test_fast_mode_strips_think_from_chapter_and_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -122,7 +152,7 @@ class BookGenFlowTest(unittest.TestCase):
 
             responses = [
                 "# 第一章\n<think>hidden-chapter</think>\n正文",
-                "<think>hidden-summary</think>摘要",
+                "摘要",
             ]
 
             def fake_call_with_retries(cfg, messages, retries=3, echo=False, think_enabled=None):  # noqa: ANN001
@@ -181,6 +211,59 @@ class BookGenFlowTest(unittest.TestCase):
 
             self.assertEqual(rc, 0)
             self.assertEqual(echo_flags, [True, True])
+
+    def test_context_reset_called_before_chapter_and_after_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "story.txt"
+            toc = tmp_path / "story-toc.txt"
+            source.write_text("背景。", encoding="utf-8")
+            toc.write_text("# 第一章\n# 第二章\n", encoding="utf-8")
+
+            responses = ["正文1", "摘要1", "正文2", "摘要2"]
+            reset_calls = {"n": 0}
+
+            def fake_call_with_retries(cfg, messages, retries=3, echo=False, think_enabled=None):  # noqa: ANN001
+                return responses.pop(0)
+
+            def fake_reset(cfg):  # noqa: ANN001
+                reset_calls["n"] += 1
+
+            with patch("bookgen.call_with_retries", side_effect=fake_call_with_retries):
+                with patch("bookgen.reset_service_context", side_effect=fake_reset):
+                    rc = bookgen.run([str(source), str(toc), "-n", "2", "-l", "Chinese"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(reset_calls["n"], 4)
+
+    def test_summary_single_call_with_think_off_and_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source = tmp_path / "story.txt"
+            toc = tmp_path / "story-toc.txt"
+            source.write_text("背景。", encoding="utf-8")
+            toc.write_text("# 第一章\n", encoding="utf-8")
+
+            responses = [
+                "章节正文",
+                "<think>reasoning</think>摘要正文",
+            ]
+            think_args = []
+
+            def fake_call_with_retries(cfg, messages, retries=3, echo=False, think_enabled=None):  # noqa: ANN001
+                think_args.append(think_enabled)
+                return responses.pop(0)
+
+            with patch("bookgen.call_with_retries", side_effect=fake_call_with_retries):
+                rc = bookgen.run([str(source), str(toc), "-n", "1", "-l", "Chinese"])
+
+            self.assertEqual(rc, 0)
+            # chapter once (default think on), summary once (forced think off)
+            self.assertEqual(think_args, [True, False])
+            outdir = tmp_path / "story"
+            summary = (outdir / "chapter_01_summary.txt").read_text(encoding="utf-8")
+            self.assertIn("摘要正文", summary)
+            self.assertNotIn("<think>", summary)
 
 
 if __name__ == "__main__":

@@ -213,16 +213,36 @@ def resolve_chat_url(service_url: str, service_type: str) -> str:
     return base + "/chat/completions"
 
 
+def resolve_generate_url(service_url: str) -> str:
+    base = service_url.rstrip("/")
+    if base.endswith("/api/generate"):
+        return base
+    if base.endswith("/api"):
+        return base + "/generate"
+    return base + "/api/generate"
+
+
 def apply_think_option(payload: Dict[str, object], think_enabled: Optional[bool]) -> None:
     # Best-effort: models/services that do not support think controls will ignore these fields.
     if think_enabled is None:
         return
+    # Different models/backends may use different keys.
     payload["think"] = think_enabled
+    payload["thinking"] = think_enabled
     options = payload.get("options")
     if isinstance(options, dict):
         options["think"] = think_enabled
+        options["thinking"] = think_enabled
     else:
-        payload["options"] = {"think": think_enabled}
+        payload["options"] = {"think": think_enabled, "thinking": think_enabled}
+
+
+def reset_service_context(cfg: Config) -> None:
+    # /clear semantics: clear conversation state only, do not unload/touch model residency.
+    # In this API workflow we already send standalone message histories per request,
+    # so context reset is represented by request boundaries.
+    _ = cfg
+    return
 
 
 def discover_default_model(service_url: str, service_type: str) -> Optional[str]:
@@ -292,7 +312,6 @@ def stream_ollama_chat(
         "model": model,
         "messages": messages,
         "stream": True,
-        "keep_alive": 0,
     }
     if context_size is not None:
         payload["options"] = {"num_ctx": context_size}
@@ -420,6 +439,12 @@ def write_text(path: Path, text: str) -> None:
     path.write_text(text.strip() + "\n", encoding="utf-8")
 
 
+def dump_input_bundle(path: Path, messages: List[Dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps({"messages": messages}, ensure_ascii=False, indent=2)
+    path.write_text(serialized + "\n", encoding="utf-8")
+
+
 def build_generation_prompt(
     chapter_idx: int,
     chapter_title: str,
@@ -450,7 +475,7 @@ Requirements:
 - Keep continuity with prior summary.
 - Do not write future chapters.
 - Write in {lang}.
-{"- Fast mode: do not output <think> tags or reasoning traces." if fast else ""}
+{"- Fast mode: do not output <think> tags or reasoning traces." if fast else "- If supported by the model, keep think/reasoning mode enabled for chapter generation."}
 """.strip()
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -458,6 +483,8 @@ Requirements:
 def build_summary_prompt(chapter_markdown: str, summary_size: int, lang: str) -> List[Dict[str, str]]:
     system = "You create concise continuity summaries for future generation."
     user = f"""
+/no_think
+
 Summarize the following chapter for use as context in the next chapter.
 Target length: about {summary_size} words.
 Focus on key events, decisions, character/argument state, unresolved threads, and tone.
@@ -468,6 +495,15 @@ Chapter text:
 {chapter_markdown}
 """.strip()
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def generate_summary_nothink(
+    cfg: Config,
+    summary_messages: List[Dict[str, str]],
+) -> str:
+    # Keep summary request simple: pass think-off payload once, then sanitize output.
+    text = call_with_retries(cfg, summary_messages, echo=cfg.echo, think_enabled=False).strip()
+    return strip_think_blocks(text).strip()
 
 
 def resolve_config(args: argparse.Namespace, input_paths: List[Path]) -> Config:
@@ -623,9 +659,17 @@ def run(argv: Optional[List[str]] = None) -> int:
     chapter_files: List[Path] = []
 
     for idx, title in enumerate(chapters, start=1):
+        reset_service_context(cfg)
         log(cfg, 0, f"\n=== Generating chapter {idx}/{len(chapters)}: {title} ===")
         gen_messages = build_generation_prompt(idx, title, toc_text, global_material, previous_summary, cfg.lang, cfg.fast)
-        chapter_text = call_with_retries(cfg, gen_messages, echo=cfg.echo, think_enabled=(False if cfg.fast else True))
+        if cfg.verbosity >= 1:
+            dump_input_bundle(cfg.outdir / f"chapter_{idx:02d}.input", gen_messages)
+        chapter_text = call_with_retries(
+            cfg,
+            gen_messages,
+            echo=cfg.echo,
+            think_enabled=(False if cfg.fast else True),
+        )
         if cfg.fast:
             chapter_text = strip_think_blocks(chapter_text).strip()
 
@@ -635,16 +679,15 @@ def run(argv: Optional[List[str]] = None) -> int:
         log(cfg, 1, f"Wrote {chapter_file}")
 
         log(cfg, 0, f"--- Summarizing chapter {idx} for continuity ---")
-        summary_messages = build_summary_prompt(chapter_text, cfg.summary_size, cfg.lang)
-        summary_text = strip_think_blocks(
-            call_with_retries(cfg, summary_messages, echo=cfg.echo, think_enabled=False)
-        ).strip()
+        chapter_text_for_summary = strip_think_blocks(chapter_text).strip()
+        summary_messages = build_summary_prompt(chapter_text_for_summary, cfg.summary_size, cfg.lang)
+        summary_text = generate_summary_nothink(cfg, summary_messages)
         summary_file = cfg.outdir / f"chapter_{idx:02d}_summary.txt"
         write_text(summary_file, summary_text)
         previous_summary = summary_text
         log(cfg, 1, f"Wrote {summary_file}")
 
-        # Session reset equivalent: each request is sent with standalone message history only.
+        reset_service_context(cfg)
         log(cfg, 0, "--- Context reset complete ---")
 
     full_book = build_full_book(cfg.outdir, chapter_files)
