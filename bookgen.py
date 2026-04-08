@@ -23,7 +23,7 @@ if VERSION.startswith("@") and VERSION.endswith("@"):
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api"
 DEFAULT_OPENAI_URL = "http://localhost:11434/v1"
 DEFAULT_SUMMARY_SIZE = 300
-DEFAULT_TIMEOUT_SECONDS = 120
+DEFAULT_TIMEOUT_SECONDS = 200
 DEFAULT_RETRIES = 3
 
 
@@ -35,6 +35,7 @@ class Config:
     context_size: Optional[int]
     outdir: Path
     summary_size: int
+    timeout_s: int
     lang: str
     chapter_spec: Optional[str]
     chapter_format: Optional[str]
@@ -93,6 +94,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("-m", "--model", dest="model", help="Model name.")
     parser.add_argument("-C", "--context", dest="context_size", type=int, help="Context size.")
     parser.add_argument("-o", "--outdir", dest="outdir", help="Output directory.")
+    parser.add_argument(
+        "-w",
+        "--timeout",
+        dest="timeout_s",
+        type=int,
+        default=None,
+        help=f"Request timeout in seconds, default {DEFAULT_TIMEOUT_SECONDS}.",
+    )
     parser.add_argument(
         "-s",
         "--summary-size",
@@ -425,11 +434,11 @@ def call_with_retries(
 ) -> str:
     for attempt in range(1, retries + 1):
         try:
-            return chat_stream(cfg, messages, echo=echo, think_enabled=think_enabled)
+            return chat_stream(cfg, messages, timeout_s=cfg.timeout_s, echo=echo, think_enabled=think_enabled)
         except (requests.Timeout, requests.ConnectionError) as exc:
             if attempt == retries:
                 raise RuntimeError(f"Failed after {retries} attempts: {exc}") from exc
-            log(cfg, 0, f"Request failed ({exc}). Retrying {attempt}/{retries}...")
+            log(cfg, 0, f"Request failed ({exc}). Retrying {attempt}/{retries} (timeout={cfg.timeout_s}s)...")
             time.sleep(min(2 * attempt, 8))
     raise RuntimeError("Unexpected retry termination.")
 
@@ -537,6 +546,9 @@ def resolve_config(args: argparse.Namespace, input_paths: List[Path]) -> Config:
     )
     if summary_size is None:
         summary_size = DEFAULT_SUMMARY_SIZE
+    timeout_s = args.timeout_s or _as_int(env_data.get("BOOKGEN_TIMEOUT")) or _as_int(yaml_data.get("timeout"))
+    if timeout_s is None or timeout_s <= 0:
+        timeout_s = DEFAULT_TIMEOUT_SECONDS
     lang = (
         args.lang
         or str(env_data.get("BOOKGEN_LANG") or yaml_data.get("lang") or "").strip()
@@ -551,6 +563,7 @@ def resolve_config(args: argparse.Namespace, input_paths: List[Path]) -> Config:
         context_size=context_size,
         outdir=outdir,
         summary_size=summary_size,
+        timeout_s=timeout_s,
         lang=lang,
         chapter_spec=args.chapter_spec,
         chapter_format=args.chapter_format,
