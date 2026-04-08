@@ -1,3 +1,15 @@
+bookgen (1.1.0) unstable; urgency=medium
+
+  * Add and refine think-control handling:
+    - summary always disables think to improve speed and determinism
+    - generation restores think when not in --fast mode
+    - fallback retry without think controls for model compatibility on HTTP 400
+  * Strip <think> blocks from summary outputs and full_book aggregation.
+  * Add --fast mode and extend --echo to stream summary output in real time.
+  * Expand test coverage for think stripping, think toggle flow, and echo behavior.
+
+ -- Lenik (谢继雷) <lenik@bodz.net>  Wed, 08 Apr 2026 00:00:00 +0000
+
 bookgen (1.0.0) unstable; urgency=medium
 
   * Initial release.

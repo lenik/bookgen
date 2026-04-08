@@ -6,7 +6,6 @@ OUTDIR ?= output
 CHAPTERS ?= 3
 BOOK_LANG ?= Chinese
 FORMAT ?= 第%d章
-
 .PHONY: help generate clean
 
 all: generate
@@ -25,7 +24,7 @@ help:
 	@echo "  FORMAT=$(FORMAT)"
 
 generate:
-	$(PYTHON) $(BOOKGEN) bookinfo.txt \
+	$(PYTHON) $(BOOKGEN) -e bookinfo.txt \
 		-S "$(SERVICE)" \
 		-t ollama \
 		-o "$(OUTDIR)" \

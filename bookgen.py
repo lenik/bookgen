@@ -38,6 +38,7 @@ class Config:
     lang: str
     chapter_spec: Optional[str]
     chapter_format: Optional[str]
+    fast: bool
     verbosity: int
     echo: bool
 
@@ -112,6 +113,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         dest="chapter_format",
         help='Chapter title format with %%d, e.g. "subsection 1.%%d", "第%%d章".',
     )
+    parser.add_argument("-f", "--fast", action="store_true", help="Disable think/reasoning output mode.")
     parser.add_argument("-l", "--lang", dest="lang", help="Output language. Auto-detected by model and inputs if omitted.")
     parser.add_argument("-e", "--echo", action="store_true", help="Echo generated chapter content to stdout in real-time.")
     parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity (repeatable: -v, -vv).")
@@ -211,6 +213,18 @@ def resolve_chat_url(service_url: str, service_type: str) -> str:
     return base + "/chat/completions"
 
 
+def apply_think_option(payload: Dict[str, object], think_enabled: Optional[bool]) -> None:
+    # Best-effort: models/services that do not support think controls will ignore these fields.
+    if think_enabled is None:
+        return
+    payload["think"] = think_enabled
+    options = payload.get("options")
+    if isinstance(options, dict):
+        options["think"] = think_enabled
+    else:
+        payload["options"] = {"think": think_enabled}
+
+
 def discover_default_model(service_url: str, service_type: str) -> Optional[str]:
     timeout_s = 5
     base = service_url.rstrip("/")
@@ -271,6 +285,7 @@ def stream_ollama_chat(
     context_size: Optional[int],
     timeout_s: int,
     echo: bool,
+    think_enabled: Optional[bool],
 ) -> str:
     url = resolve_chat_url(service_url, "ollama")
     payload: Dict[str, object] = {
@@ -281,27 +296,40 @@ def stream_ollama_chat(
     }
     if context_size is not None:
         payload["options"] = {"num_ctx": context_size}
-
-    with requests.post(url, json=payload, stream=True, timeout=timeout_s) as resp:
-        if resp.status_code == 405:
-            raise RuntimeError(
-                f"405 Method Not Allowed at {url}. "
-                "Ollama /api/chat requires POST. Verify --type ollama and --service base URL."
-            )
-        resp.raise_for_status()
-        full = []
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
+    apply_think_option(payload, think_enabled)
+    attempted_without_think = False
+    while True:
+        with requests.post(url, json=payload, stream=True, timeout=timeout_s) as resp:
+            if resp.status_code == 405:
+                raise RuntimeError(
+                    f"405 Method Not Allowed at {url}. "
+                    "Ollama /api/chat requires POST. Verify --type ollama and --service base URL."
+                )
+            if resp.status_code == 400 and think_enabled is not None and not attempted_without_think:
+                # Some models reject explicit think controls. Retry once without them.
+                payload.pop("think", None)
+                if isinstance(payload.get("options"), dict):
+                    payload["options"].pop("think", None)
+                attempted_without_think = True
                 continue
-            data = json.loads(line)
-            token = data.get("message", {}).get("content", "")
-            if token:
-                if echo:
-                    print(token, end="", flush=True)
-                full.append(token)
-        if echo:
-            print("")
-        return "".join(full).strip()
+            if resp.status_code >= 400:
+                detail = (resp.text or "").strip()
+                if detail:
+                    raise RuntimeError(f"Ollama request failed ({resp.status_code}) at {url}: {detail}")
+            resp.raise_for_status()
+            full = []
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                data = json.loads(line)
+                token = data.get("message", {}).get("content", "")
+                if token:
+                    if echo:
+                        print(token, end="", flush=True)
+                    full.append(token)
+            if echo:
+                print("")
+            return "".join(full).strip()
 
 
 def stream_openai_chat(
@@ -311,6 +339,7 @@ def stream_openai_chat(
     context_size: Optional[int],
     timeout_s: int,
     echo: bool,
+    think_enabled: Optional[bool],
 ) -> str:
     url = resolve_chat_url(service_url, "openai")
     payload: Dict[str, object] = {
@@ -320,6 +349,7 @@ def stream_openai_chat(
     }
     if context_size is not None:
         payload["max_tokens"] = context_size
+    apply_think_option(payload, think_enabled)
 
     with requests.post(url, json=payload, stream=True, timeout=timeout_s) as resp:
         if resp.status_code == 405:
@@ -356,10 +386,15 @@ def chat_stream(
     messages: List[Dict[str, str]],
     timeout_s: int = DEFAULT_TIMEOUT_SECONDS,
     echo: bool = False,
+    think_enabled: Optional[bool] = None,
 ) -> str:
     if cfg.service_type == "ollama":
-        return stream_ollama_chat(cfg.service_url, cfg.model, messages, cfg.context_size, timeout_s, echo)
-    return stream_openai_chat(cfg.service_url, cfg.model, messages, cfg.context_size, timeout_s, echo)
+        return stream_ollama_chat(
+            cfg.service_url, cfg.model, messages, cfg.context_size, timeout_s, echo, think_enabled
+        )
+    return stream_openai_chat(
+        cfg.service_url, cfg.model, messages, cfg.context_size, timeout_s, echo, think_enabled
+    )
 
 
 def call_with_retries(
@@ -367,10 +402,11 @@ def call_with_retries(
     messages: List[Dict[str, str]],
     retries: int = DEFAULT_RETRIES,
     echo: bool = False,
+    think_enabled: Optional[bool] = None,
 ) -> str:
     for attempt in range(1, retries + 1):
         try:
-            return chat_stream(cfg, messages, echo=echo)
+            return chat_stream(cfg, messages, echo=echo, think_enabled=think_enabled)
         except (requests.Timeout, requests.ConnectionError) as exc:
             if attempt == retries:
                 raise RuntimeError(f"Failed after {retries} attempts: {exc}") from exc
@@ -391,6 +427,7 @@ def build_generation_prompt(
     global_material: str,
     prev_summary: str,
     lang: str,
+    fast: bool,
 ) -> List[Dict[str, str]]:
     system = (
         "You are a professional long-form writer. Follow the provided context and TOC. "
@@ -413,6 +450,7 @@ Requirements:
 - Keep continuity with prior summary.
 - Do not write future chapters.
 - Write in {lang}.
+{"- Fast mode: do not output <think> tags or reasoning traces." if fast else ""}
 """.strip()
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -424,6 +462,7 @@ Summarize the following chapter for use as context in the next chapter.
 Target length: about {summary_size} words.
 Focus on key events, decisions, character/argument state, unresolved threads, and tone.
 Write the summary in {lang}.
+Do not output any <think> tags or hidden reasoning.
 
 Chapter text:
 {chapter_markdown}
@@ -479,6 +518,7 @@ def resolve_config(args: argparse.Namespace, input_paths: List[Path]) -> Config:
         lang=lang,
         chapter_spec=args.chapter_spec,
         chapter_format=args.chapter_format,
+        fast=bool(args.fast),
         verbosity=(args.verbose or 0) - (args.quiet or 0),
         echo=bool(args.echo),
     )
@@ -521,9 +561,13 @@ def infer_language(model: str, input_paths: List[Path]) -> str:
 
 def build_full_book(outdir: Path, chapter_files: List[Path]) -> Path:
     full_book_path = outdir / "full_book.md"
-    parts = [p.read_text(encoding="utf-8") for p in chapter_files]
+    parts = [strip_think_blocks(p.read_text(encoding="utf-8")) for p in chapter_files]
     full_book_path.write_text("\n\n".join(parts).strip() + "\n", encoding="utf-8")
     return full_book_path
+
+
+def strip_think_blocks(text: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
 
 
 def validate_files(paths: List[Path]) -> None:
@@ -580,8 +624,10 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     for idx, title in enumerate(chapters, start=1):
         log(cfg, 0, f"\n=== Generating chapter {idx}/{len(chapters)}: {title} ===")
-        gen_messages = build_generation_prompt(idx, title, toc_text, global_material, previous_summary, cfg.lang)
-        chapter_text = call_with_retries(cfg, gen_messages, echo=cfg.echo)
+        gen_messages = build_generation_prompt(idx, title, toc_text, global_material, previous_summary, cfg.lang, cfg.fast)
+        chapter_text = call_with_retries(cfg, gen_messages, echo=cfg.echo, think_enabled=(False if cfg.fast else True))
+        if cfg.fast:
+            chapter_text = strip_think_blocks(chapter_text).strip()
 
         chapter_file = cfg.outdir / f"chapter_{idx:02d}.md"
         write_text(chapter_file, chapter_text)
@@ -590,7 +636,9 @@ def run(argv: Optional[List[str]] = None) -> int:
 
         log(cfg, 0, f"--- Summarizing chapter {idx} for continuity ---")
         summary_messages = build_summary_prompt(chapter_text, cfg.summary_size, cfg.lang)
-        summary_text = call_with_retries(cfg, summary_messages, echo=False)
+        summary_text = strip_think_blocks(
+            call_with_retries(cfg, summary_messages, echo=cfg.echo, think_enabled=False)
+        ).strip()
         summary_file = cfg.outdir / f"chapter_{idx:02d}_summary.txt"
         write_text(summary_file, summary_text)
         previous_summary = summary_text
